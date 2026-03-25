@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Qbits String Sizing Calculator | Qbits Energy</title>
+  <meta name="description" content="Free solar string sizing calculator for Qbits inverters — powered by Heaven Designs.">
+  <link rel="icon" href="https://qbitsenergy.com/wp-content/uploads/2025/10/unnamed.png">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'DM Sans','Segoe UI',sans-serif;-webkit-font-smoothing:antialiased;background:linear-gradient(165deg,#f0fdf4 0%,#ecfdf5 40%,#f8fafc 100%);min-height:100vh}
+    ::selection{background:#bbf7d0;color:#166534}
+    input[type="number"]::-webkit-inner-spin-button,input[type="number"]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+    input[type="number"]{-moz-appearance:textfield}
+    .mono{font-family:'JetBrains Mono',monospace}
+    .card{background:white;border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,0.06),0 4px 16px rgba(0,0,0,0.04);border:1px solid #e2e8f0}
+    .badge{width:26px;height:26px;background:#dcfce7;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#166534}
+    .btn{padding:10px 12px;border-radius:10px;border:1.5px solid #d1d5db;font-size:14px;background:white;width:100%;box-sizing:border-box}
+    select.btn{cursor:pointer}
+    .loading{text-align:center;padding:40px;color:#94a3b8}
+    .spin{display:inline-block;width:24px;height:24px;border:3px solid #e2e8f0;border-top-color:#16a34a;border-radius:50%;animation:spin 0.8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .panel-icon{width:18px;height:10px;background:linear-gradient(135deg,#1e40af,#3b82f6);border-radius:2px;border:1px solid #1e3a8a;flex-shrink:0}
+    .vbar-marker{width:10px;height:24px;border-radius:3px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.2);position:absolute;top:16px;transform:translateX(-50%);z-index:5}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th{padding:12px 14px;text-align:center;font-weight:600;color:#475569;border-bottom:2px solid #e2e8f0;font-size:11px;text-transform:uppercase;white-space:nowrap}
+    td{padding:10px 14px;text-align:center;border-bottom:1px solid #f1f5f9}
+    tr:hover{background:#f8fafc}
+    .step-btn{width:32px;height:32px;border-radius:8px;border:1.5px solid #d1d5db;background:white;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#475569;font-weight:700}
+    .step-btn:hover{background:#f0fdf4;border-color:#16a34a}
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div style="background:linear-gradient(135deg,#166534,#15803d,#16a34a);padding:28px 24px;color:white">
+  <div style="max-width:960px;margin:0 auto;display:flex;align-items:center;gap:12px">
+    <div style="width:44px;height:44px;background:rgba(255,255,255,0.2);border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:24px">⚡</div>
+    <div>
+      <div style="font-size:23px;font-weight:700;letter-spacing:-0.5px">Qbits String Sizing Calculator</div>
+      <div style="font-size:13px;opacity:0.85;margin-top:2px">Smart string sizing for Qbits inverters — by Heaven Designs</div>
+    </div>
+  </div>
+</div>
+
+<div id="app" style="max-width:960px;margin:0 auto;padding:24px 16px 60px"></div>
+
+<script>
+const API = window.location.origin;
+const deg = "\u00b0C";
+let state = { panels: [], inverters: [], pw: "", ii: "", tp: "", tMin: -5, tMax: 50, result: null, barN: null, barData: null, loading: false, showRecs: false };
+
+async function loadOptions() {
+  try {
+    const r = await fetch(API + "/api/options");
+    const d = await r.json();
+    state.panels = d.panels;
+    state.inverters = d.inverters;
+    render();
+  } catch(e) { document.getElementById("app").innerHTML = '<div class="card" style="padding:40px;text-align:center;color:#dc2626">Failed to connect to server. Please refresh.</div>'; }
+}
+
+async function doCalc() {
+  if (!state.pw || !state.ii || !state.tp) { state.result = null; state.barN = null; state.barData = null; render(); return; }
+  state.loading = true; render();
+  try {
+    const r = await fetch(API + "/api/calculate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ panelWp: +state.pw, inverterId: state.ii, totalPanels: +state.tp, tMin: state.tMin, tMax: state.tMax }),
+    });
+    state.result = await r.json();
+    state.barN = null; state.barData = null;
+    // Auto-load voltage bar with first MPPT's panel count
+    if (state.result.distribution && !state.result.distribution.error && state.result.distribution.distributions.length) {
+      await loadBar(state.result.distribution.distributions[0].modulesPerString);
+    }
+  } catch(e) { state.result = { error: "Calculation failed" }; }
+  state.loading = false; render();
+}
+
+async function loadBar(n) {
+  if (!state.pw || !state.ii || n < 1) return;
+  state.barN = n;
+  try {
+    const r = await fetch(API + "/api/voltage-bar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ panelWp: +state.pw, inverterId: state.ii, panelsPerString: n, tMin: state.tMin, tMax: state.tMax }),
+    });
+    state.barData = await r.json();
+  } catch(e) { state.barData = null; }
+  render();
+}
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) Object.entries(attrs).forEach(([k, v]) => {
+    if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2).toLowerCase(), v);
+    else el.setAttribute(k, v);
+  });
+  kids.flat().forEach(c => { if (c != null) el.append(typeof c === "string" ? document.createTextNode(c) : c); });
+  return el;
+}
+
+function renderVoltageBar(bd) {
+  if (!bd || bd.error) return h("div", { style: { color: "#94a3b8", padding: "12px" } }, "Select panels per string to see voltage bar");
+  const lim = bd.limits;
+  const scaleMax = lim.maxDcV * 1.15;
+  const pct = v => Math.max(0, Math.min((v / scaleMax) * 100, 100));
+  const mpptL = pct(lim.mpptMin), mpptW = pct(lim.mpptMax) - mpptL;
+  const vocC = +bd.vocCold, vmpH = +bd.vmpHot, vmpCd = +bd.vmpCold;
+  const vocEx = vocC > lim.maxDcV, vmpBel = vmpH < lim.mpptMin;
+
+  const wrap = h("div", { style: { background: "#f8fafc", borderRadius: "12px", padding: "16px 18px", border: "1px solid #e2e8f0" } });
+
+  // Header
+  const hdr = h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" } });
+  hdr.append(h("div", { style: { fontSize: "13px", color: "#334155" } }, "Showing voltages for ", h("b", { class: "mono", style: { fontSize: "15px", color: "#166534" } }, String(bd.panelsPerString)), " panels/string"));
+  hdr.append(h("span", { style: { padding: "3px 12px", borderRadius: "6px", fontSize: "11px", fontWeight: "700", color: "white", background: bd.rating.color } }, bd.rating.icon + " " + bd.rating.label));
+  wrap.append(hdr);
+
+  // Value cards
+  const cards = h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "16px" } });
+  [
+    { lbl: "Voc @ " + state.tMin + deg, val: bd.vocCold + " V", col: vocEx ? "#dc2626" : "#1e40af", warn: vocEx ? "EXCEEDS " + lim.maxDcV + "V MAX!" : null, bdr: vocEx },
+    { lbl: "Vmp @ " + state.tMax + deg, val: bd.vmpHot + " V", col: vmpBel ? "#dc2626" : "#b45309", warn: vmpBel ? "BELOW " + lim.mpptMin + "V MIN!" : null, bdr: vmpBel },
+    { lbl: "Vmp @ " + state.tMin + deg, val: bd.vmpCold + " V", col: "#6d28d9", warn: null, bdr: false },
+  ].forEach(c => {
+    const cd = h("div", { style: { background: "white", borderRadius: "8px", padding: "8px 12px", textAlign: "center", border: c.bdr ? "2px solid #dc2626" : "1px solid #e2e8f0" } });
+    cd.append(h("div", { style: { fontSize: "10px", color: c.bdr ? "#dc2626" : c.col, fontWeight: "600", textTransform: "uppercase" } }, c.lbl));
+    cd.append(h("div", { class: "mono", style: { fontSize: "18px", fontWeight: "700", color: c.col } }, c.val));
+    if (c.warn) cd.append(h("div", { style: { fontSize: "9px", color: "#dc2626", fontWeight: "600" } }, c.warn));
+    cards.append(cd);
+  });
+  wrap.append(cards);
+
+  // Visual bar
+  const bar = h("div", { style: { position: "relative", height: "56px", marginBottom: "8px" } });
+  // Danger zone
+  const dz = h("div", { style: { position: "absolute", top: "14px", left: "0", right: "0", height: "28px", background: "#fee2e2", borderRadius: "6px", border: "1px solid #fecaca" } });
+  dz.append(h("div", { style: { position: "absolute", right: "6px", top: "-13px", fontSize: "9px", color: "#dc2626", fontWeight: "600" } }, "Max DC: " + lim.maxDcV + " V"));
+  bar.append(dz);
+  // MPPT zone
+  const mz = h("div", { style: { position: "absolute", top: "14px", left: mpptL + "%", width: mpptW + "%", height: "28px", background: "linear-gradient(90deg,#dcfce7,#bbf7d0)", borderRadius: "5px", border: "1.5px solid #86efac" } });
+  mz.append(h("div", { style: { position: "absolute", left: "4px", bottom: "-14px", fontSize: "9px", color: "#15803d", fontWeight: "500" } }, lim.mpptMin + " V"));
+  mz.append(h("div", { style: { position: "absolute", right: "4px", bottom: "-14px", fontSize: "9px", color: "#15803d", fontWeight: "500" } }, lim.mpptMax + " V"));
+  mz.append(h("div", { style: { position: "absolute", left: "50%", top: "-13px", transform: "translateX(-50%)", fontSize: "9px", color: "#15803d", fontWeight: "700", background: "#dcfce7", padding: "0 4px", borderRadius: "3px" } }, "MPPT WINDOW"));
+  bar.append(mz);
+  // Rec line
+  const rl = h("div", { style: { position: "absolute", top: "10px", left: pct(lim.recV) + "%", width: "2px", height: "36px", background: "#166534", zIndex: "3", borderRadius: "1px" } });
+  rl.append(h("div", { style: { position: "absolute", top: "-12px", left: "50%", transform: "translateX(-50%)", fontSize: "8px", color: "#166534", fontWeight: "700", whiteSpace: "nowrap", background: "white", padding: "0 3px", borderRadius: "2px" } }, "REC " + lim.recV + "V"));
+  bar.append(rl);
+  // Markers
+  [{ v: vmpH, col: vmpBel ? "#dc2626" : "#f59e0b" }, { v: vocC, col: vocEx ? "#dc2626" : "#3b82f6" }, { v: vmpCd, col: "#7c3aed" }].forEach(mk => {
+    bar.append(h("div", { style: { position: "absolute", top: "16px", left: pct(mk.v) + "%", transform: "translateX(-50%)", zIndex: "5" } }, h("div", { style: { width: "10px", height: "24px", background: mk.col, borderRadius: "3px", border: "2px solid white", boxShadow: "0 2px 8px rgba(0,0,0,0.2)" } })));
+  });
+  wrap.append(bar);
+
+  // Legend
+  const leg = h("div", { style: { display: "flex", gap: "14px", fontSize: "10px", color: "#64748b", flexWrap: "wrap", marginTop: "14px" } });
+  [["#dcfce7","#86efac","MPPT Range"],["#fee2e2","#fecaca","Over-voltage"],["#f59e0b",null,"Vmp @ "+state.tMax+deg],["#3b82f6",null,"Voc @ "+state.tMin+deg],["#7c3aed",null,"Vmp @ "+state.tMin+deg]].forEach(([bg,bd2,lbl])=>{
+    const s=h("span",{style:{display:"flex",alignItems:"center",gap:"4px"}});
+    s.append(h("span",{style:{width:"9px",height:"9px",background:bg,border:bd2?"1px solid "+bd2:"none",borderRadius:"2px"}}));
+    s.append(lbl);
+    leg.append(s);
+  });
+  wrap.append(leg);
+  return wrap;
+}
+
+function render() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  const R = state.result;
+
+  // ═══ STEP 1: INPUTS ═══
+  const s1 = h("div", { class: "card", style: { padding: "28px", marginBottom: "20px" } });
+  s1.append(h("div", { style: { fontSize: "15px", fontWeight: "600", color: "#166534", marginBottom: "20px", display: "flex", alignItems: "center", gap: "8px" } }, h("span", { class: "badge" }, "1"), " Equipment & Site Conditions"));
+
+  const grid = h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: "16px" } });
+
+  // Panel select
+  const pSel = h("select", { class: "btn", onchange: function() { state.pw = this.value; state.barN = null; doCalc(); } });
+  pSel.append(h("option", { value: "" }, "Select Panel"));
+  state.panels.forEach(p => { const o = h("option", { value: String(p.wp) }, p.label); if (String(p.wp) === state.pw) o.selected = true; pSel.append(o); });
+  grid.append(h("div", null, h("label", { style: { display: "block", fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.5px" } }, "Panel"), pSel));
+
+  // Inverter select
+  const iSel = h("select", { class: "btn", onchange: function() { state.ii = this.value; state.barN = null; doCalc(); } });
+  iSel.append(h("option", { value: "" }, "Select Inverter"));
+  state.inverters.forEach(i => { const o = h("option", { value: i.id }, i.label); if (i.id === state.ii) o.selected = true; iSel.append(o); });
+  grid.append(h("div", null, h("label", { style: { display: "block", fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.5px" } }, "Inverter"), iSel));
+
+  // Total panels
+  const tpIn = h("input", { type: "number", class: "btn", placeholder: "e.g. 69", value: state.tp, onchange: function() { state.tp = this.value; state.barN = null; doCalc(); } });
+  grid.append(h("div", null, h("label", { style: { display: "block", fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.5px" } }, "Total Panels"), tpIn));
+
+  // Temps
+  const tmIn = h("input", { type: "number", class: "btn", value: String(state.tMin), onchange: function() { state.tMin = +this.value; doCalc(); } });
+  grid.append(h("div", null, h("label", { style: { display: "block", fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.5px" } }, "Min Temp (" + deg + ")"), tmIn));
+  const txIn = h("input", { type: "number", class: "btn", value: String(state.tMax), onchange: function() { state.tMax = +this.value; doCalc(); } });
+  grid.append(h("div", null, h("label", { style: { display: "block", fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.5px" } }, "Max Temp (" + deg + ")"), txIn));
+
+  s1.append(grid);
+
+  // Panel & Inverter Specs
+  if (R && R.panelSpec && R.inverterSpec) {
+    const specGrid = h("div", { style: { marginTop: "20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" } });
+    const ps = R.panelSpec, is = R.inverterSpec;
+
+    const pCard = h("div", { style: { background: "#f0fdf4", borderRadius: "12px", padding: "14px 18px", border: "1px solid #bbf7d0" } });
+    pCard.append(h("div", { style: { fontSize: "11px", fontWeight: "700", color: "#166534", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px" } }, "Panel @ STC"));
+    const pG = h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px", fontSize: "13px", color: "#334155" } });
+    [["Voc:",ps.voc+"V"],["Vmp:",ps.vmp+"V"],["Power:",ps.wp+"Wp"],["Isc:",ps.isc+"A"],["Imp:",ps.imp+"A"],["Tc(Voc):",ps.tcVoc+"%/"+deg]].forEach(([l,v])=>{const s=h("span",null,l+" ");s.append(h("b",null,v));pG.append(s);});
+    pCard.append(pG); specGrid.append(pCard);
+
+    const iCard = h("div", { style: { background: "#eff6ff", borderRadius: "12px", padding: "14px 18px", border: "1px solid #bfdbfe" } });
+    iCard.append(h("div", { style: { fontSize: "11px", fontWeight: "700", color: "#1e40af", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "10px" } }, "Inverter"));
+    const iG = h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px", fontSize: "13px", color: "#334155" } });
+    [["Max DC:",is.maxDcV+"V"],["MPPT:",is.mpptMin+"\u2013"+is.mpptMax+"V"],["AC:",is.ratedPower/1000+"kW"],["MPPT#:",String(is.mpptCount)],["Str:",is.stringsPerMppt.join("/")+"/MPPT"],["I(out):",is.maxOutputCurrent+"A"]].forEach(([l,v])=>{const s=h("span",null,l+" ");s.append(h("b",null,v));iG.append(s);});
+    iCard.append(iG); specGrid.append(iCard);
+    s1.append(specGrid);
+  }
+  app.append(s1);
+
+  if (state.loading) { app.append(h("div", { class: "loading" }, h("div", { class: "spin" }), h("div", { style: { marginTop: "12px" } }, "Calculating..."))); return; }
+  if (!R) { app.append(h("div", { style: { textAlign: "center", padding: "80px 20px", color: "#94a3b8" } }, h("div", { style: { fontSize: "52px", marginBottom: "14px" } }, "\u2600\uFE0F"), h("div", { style: { fontSize: "17px", fontWeight: "600", color: "#64748b" } }, "Select a panel and inverter to begin"))); return; }
+  if (R.error) { app.append(h("div", { class: "card", style: { padding: "20px", color: "#dc2626" } }, "\u26A0 " + R.error)); return; }
+
+  // ═══ DC/AC ═══
+  const capGrid = h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginBottom: "20px" } });
+  [
+    { l: "DC Capacity", v: R.capacity.dc, u: "kWp", s: R.capacity.totalPanels + " x " + R.panelSpec.wp + " Wp", c: "#166534" },
+    { l: "AC Capacity", v: R.capacity.ac, u: "kW", s: R.inverterSpec.model + " (" + R.inverterSpec.maxOutputCurrent + " A)", c: "#1e40af" },
+    { l: "DC / AC Ratio", v: R.clipping.ratio, u: "ratio", s: +R.clipping.ratio > 1.5 ? "\u26A0 Heavy" : +R.clipping.ratio > 1.3 ? "\u25B3 Moderate" : +R.clipping.ratio >= 1.05 ? "\u2713 Ideal" : "\u2713 OK", c: +R.clipping.ratio > 1.5 ? "#dc2626" : +R.clipping.ratio > 1.3 ? "#d97706" : "#166534" },
+  ].forEach(x => {
+    const cd = h("div", { class: "card", style: { padding: "18px 20px", textAlign: "center" } });
+    cd.append(h("div", { style: { fontSize: "11px", fontWeight: "600", color: "#64748b", textTransform: "uppercase", marginBottom: "6px" } }, x.l));
+    cd.append(h("div", { class: "mono", style: { fontSize: "26px", fontWeight: "700", color: x.c } }, x.v));
+    cd.append(h("div", { style: { fontSize: "13px", color: "#64748b" } }, x.u));
+    cd.append(h("div", { style: { fontSize: "11px", color: x.c, marginTop: "4px" } }, x.s));
+    capGrid.append(cd);
+  });
+  app.append(capGrid);
+
+  // ═══ CLIPPING ═══
+  const cl = R.clipping;
+  if (cl.severity !== "none") {
+    const clCard = h("div", { class: "card", style: { padding: "22px", marginBottom: "20px", borderColor: cl.severity === "critical" ? "#fecaca" : cl.severity === "high" ? "#fed7aa" : "#fde68a" } });
+    clCard.append(h("div", { style: { fontSize: "15px", fontWeight: "700", color: { none: "#15803d", low: "#15803d", moderate: "#d97706", high: "#ea580c", critical: "#dc2626" }[cl.severity], marginBottom: "16px" } }, (cl.severity === "critical" ? "\u{1F6A8}" : "\u26A0\uFE0F") + " Power Clipping \u2014 " + cl.pct + "% energy loss at peak"));
+    const clG = h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "10px", marginBottom: "16px" } });
+    [["DC Peak", (cl.dcEffective / 1000).toFixed(2), "kW"], ["AC Limit", (cl.acLimit / 1000).toFixed(2), "kW"], ["Clipped", (cl.clipped / 1000).toFixed(2), cl.pct + "% lost"], ["Annual Loss", "~" + cl.annualLoss, "kWh/year"]].forEach(([l, v, s]) => {
+      const c = h("div", { style: { background: "#f8fafc", borderRadius: "10px", padding: "10px 14px", textAlign: "center" } });
+      c.append(h("div", { style: { fontSize: "10px", color: "#64748b", textTransform: "uppercase", marginBottom: "4px" } }, l));
+      c.append(h("div", { class: "mono", style: { fontSize: "17px", fontWeight: "700" } }, v));
+      c.append(h("div", { style: { fontSize: "10px", color: "#94a3b8" } }, s));
+      clG.append(c);
+    });
+    clCard.append(clG);
+    // Bar
+    const barWrap = h("div", { style: { borderRadius: "8px", overflow: "hidden", border: "1px solid #e2e8f0" } });
+    const barFlex = h("div", { style: { display: "flex", height: "28px" } });
+    barFlex.append(h("div", { style: { width: (100 - +cl.pct) + "%", background: "linear-gradient(90deg,#22c55e,#16a34a)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "600", color: "white", minWidth: "40px" } }, (100 - +cl.pct).toFixed(0) + "% Utilized"));
+    barFlex.append(h("div", { style: { width: cl.pct + "%", background: "repeating-linear-gradient(45deg,#fca5a5,#fca5a5 4px,#fecaca 4px,#fecaca 8px)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "600", color: "#dc2626", minWidth: "40px" } }, cl.pct + "% Clipped"));
+    barWrap.append(barFlex); clCard.append(barWrap);
+    app.append(clCard);
+  } else {
+    const noClip = h("div", { class: "card", style: { padding: "14px 20px", marginBottom: "20px", borderColor: "#bbf7d0", display: "flex", alignItems: "center", gap: "10px" } });
+    noClip.append("\u2705 "); noClip.append(h("b", { style: { color: "#166534" } }, "No Power Clipping")); noClip.append(" \u2014 full DC generation utilized");
+    app.append(noClip);
+  }
+
+  // ═══ RECOMMENDATIONS ═══
+  if (R.recommendations && R.recommendations.length > 0) {
+    const recCard = h("div", { class: "card", style: { padding: "22px", marginBottom: "20px" } });
+    const recHdr = h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: state.showRecs ? "16px" : "0" } });
+    recHdr.append(h("div", { style: { fontSize: "14px", fontWeight: "600", color: "#166534" } }, "\u{1F4A1} Recommended Inverters"));
+    const recBtn = h("button", { style: { padding: "6px 16px", borderRadius: "8px", border: "1.5px solid #16a34a", background: state.showRecs ? "#166534" : "white", color: state.showRecs ? "white" : "#166534", fontSize: "12px", fontWeight: "600", cursor: "pointer" }, onclick: function() { state.showRecs = !state.showRecs; render(); } }, state.showRecs ? "Hide" : "Show");
+    recHdr.append(recBtn); recCard.append(recHdr);
+    if (state.showRecs) {
+      R.recommendations.forEach((r, i) => {
+        const row = h("div", { style: { background: i === 0 ? "linear-gradient(135deg,#f0fdf4,#ecfdf5)" : "#f8fafc", borderRadius: "12px", padding: "14px 18px", border: i === 0 ? "2px solid #22c55e" : "1px solid #e2e8f0", cursor: "pointer", marginBottom: "8px" }, onclick: function() { state.ii = r.inverterId; state.barN = null; doCalc(); } });
+        const inner = h("div", { style: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "8px", alignItems: "center" } });
+        const left = h("div", { style: { display: "flex", alignItems: "center", gap: "8px" } });
+        if (i === 0) left.append(h("span", { style: { padding: "2px 8px", borderRadius: "4px", background: "#166534", color: "white", fontSize: "10px", fontWeight: "700" } }, "\u2605 BEST FIT"));
+        left.append(h("b", null, r.model));
+        left.append(h("span", { style: { fontSize: "12px", color: "#64748b" } }, r.phase + " \u00b7 " + r.ratedPower / 1000 + " kW"));
+        inner.append(left);
+        const right = h("div", { style: { display: "flex", gap: "10px", fontSize: "12px", flexWrap: "wrap", alignItems: "center" } });
+        right.append(h("span", null, "DC/AC: ", h("b", { class: "mono" }, r.ratio)));
+        right.append(h("span", null, "Used: ", h("b", { class: "mono" }, r.dist.usedPanels + "/" + R.capacity.totalPanels)));
+        r.dist.distributions.forEach(d => right.append(h("span", null, "MPPT" + (d.mpptIndex + 1) + ": ", h("b", { class: "mono" }, d.strings + "x" + d.modulesPerString))));
+        right.append(h("span", { style: { padding: "1px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: "600", background: r.dist.type === "uniform" ? "#dcfce7" : "#e0f2fe", color: r.dist.type === "uniform" ? "#166534" : "#1e40af" } }, r.dist.type === "uniform" ? "UNIFORM" : "BAL \u0394" + r.dist.gap));
+        right.append(h("span", { style: { color: r.clip.severity === "none" ? "#15803d" : "#d97706" } }, r.clip.severity === "none" ? "\u2713 No clip" : r.clip.pct + "% clip"));
+        inner.append(right); row.append(inner); recCard.append(row);
+      });
+    }
+    app.append(recCard);
+  }
+
+  // ═══ VOLTAGE BAR + MPPT DISTRIBUTION ═══
+  const distCard = h("div", { class: "card", style: { padding: "24px", marginBottom: "20px" } });
+  distCard.append(h("div", { style: { fontSize: "15px", fontWeight: "600", color: "#166534", marginBottom: "18px", display: "flex", alignItems: "center", gap: "8px" } }, h("span", { class: "badge" }, "2"), " MPPT Voltage Range & String Distribution"));
+
+  // Panel count stepper
+  const activeN = state.barN || (R.distribution && !R.distribution.error && R.distribution.distributions.length ? R.distribution.distributions[0].modulesPerString : null);
+  if (activeN) {
+    const stepRow = h("div", { style: { display: "flex", alignItems: "center", gap: "12px", marginBottom: "12px" } });
+    stepRow.append(h("label", { style: { fontSize: "12px", fontWeight: "600", color: "#475569" } }, "Panels per string:"));
+    const stepWrap = h("div", { style: { display: "flex", alignItems: "center", gap: "6px" } });
+    stepWrap.append(h("button", { class: "step-btn", onclick: function() { loadBar(Math.max(1, (state.barN || activeN) - 1)); } }, "\u2212"));
+    stepWrap.append(h("input", { type: "number", class: "mono", min: "1", max: "40", value: String(state.barN || activeN), style: { width: "60px", textAlign: "center", padding: "6px 8px", borderRadius: "8px", border: "1.5px solid #d1d5db", fontSize: "16px", fontWeight: "700", color: "#166534" }, onchange: function() { loadBar(+this.value || 1); } }));
+    stepWrap.append(h("button", { class: "step-btn", onclick: function() { loadBar(Math.min(40, (state.barN || activeN) + 1)); } }, "+"));
+    stepRow.append(stepWrap);
+    if (state.barN) {
+      stepRow.append(h("button", { style: { padding: "4px 12px", borderRadius: "6px", border: "1px solid #d1d5db", background: "#f8fafc", fontSize: "11px", cursor: "pointer", color: "#64748b" }, onclick: function() { state.barN = null; if (R.distribution && R.distribution.distributions.length) loadBar(R.distribution.distributions[0].modulesPerString); else { state.barData = null; render(); } } }, "Reset"));
+    }
+    distCard.append(stepRow);
+    distCard.append(renderVoltageBar(state.barData));
+    distCard.append(h("div", { style: { height: "20px" } }));
+  }
+
+  // MPPT Distribution
+  const dist = R.distribution;
+  if (dist && !dist.error) {
+    const infoBar = h("div", { style: { fontSize: "12px", color: "#475569", marginBottom: "16px", background: "#f0fdf4", padding: "10px 16px", borderRadius: "10px", border: "1px solid #bbf7d0", display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" } });
+    infoBar.append(h("span", { style: { padding: "3px 10px", borderRadius: "5px", fontWeight: "700", fontSize: "11px", color: "white", background: dist.type === "uniform" ? "#166534" : dist.type === "balanced" ? "#1e40af" : "#64748b" } }, dist.type === "uniform" ? "\u2713 UNIFORM" : dist.type === "balanced" ? "\u2194 BALANCED (\u0394" + dist.gap + ")" : "PARTIAL"));
+    infoBar.append(dist.type === "uniform" ? "Same panels per string across all MPPTs" : dist.type === "balanced" ? "Panel counts differ by " + dist.gap + " to maximize usage" : "Partial MPPT usage");
+    if (dist.unusedPanels > 0) infoBar.append(h("span", { style: { padding: "3px 10px", borderRadius: "5px", background: "#fef3c7", color: "#92400e", fontWeight: "600", fontSize: "11px" } }, dist.unusedPanels + " unused \u2014 voltage limit"));
+    distCard.append(infoBar);
+
+    const mpptGrid = h("div", { style: { display: "grid", gridTemplateColumns: "repeat(" + Math.max(dist.distributions.length, 1) + ",1fr)", gap: "16px" } });
+    dist.distributions.forEach(d => {
+      const pw = (d.totalModules * R.panelSpec.wp / 1000).toFixed(2);
+      const mc = h("div", { style: { background: "white", borderRadius: "14px", overflow: "hidden", border: "2px solid #e2e8f0" } });
+      // Header
+      const mh = h("div", { style: { background: "linear-gradient(135deg,#166534,#15803d)", padding: "12px 18px", display: "flex", justifyContent: "space-between", alignItems: "center" } });
+      mh.append(h("div", { style: { color: "white", fontSize: "14px", fontWeight: "700" } }, "MPPT " + (d.mpptIndex + 1)));
+      mh.append(h("span", { style: { padding: "3px 10px", borderRadius: "5px", fontSize: "10px", fontWeight: "700", color: "white", background: "rgba(255,255,255,0.25)" } }, d.rating.icon + " " + d.rating.label));
+      mc.append(mh);
+      // Body
+      const mb = h("div", { style: { padding: "16px 18px" } });
+      const statG = h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "14px" } });
+      [["Strings", d.strings], ["Panels/String", d.modulesPerString]].forEach(([lbl, val], idx) => {
+        const sc = h("div", { style: { background: "#f8fafc", borderRadius: "10px", padding: "10px 12px", textAlign: "center", border: "1px solid #e2e8f0", cursor: idx === 1 ? "pointer" : "default" }, onclick: idx === 1 ? function() { loadBar(d.modulesPerString); } : null });
+        sc.append(h("div", { class: "mono", style: { fontSize: "28px", fontWeight: "700", color: "#166534" } }, String(val)));
+        sc.append(h("div", { style: { fontSize: "10px", color: "#64748b", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px" } }, lbl));
+        statG.append(sc);
+      });
+      mb.append(statG);
+      mb.append(h("div", { style: { fontSize: "12px", color: "#475569", marginBottom: "14px" } }, "Total: ", h("b", null, d.totalModules + " panels"), " \u00b7 ", h("b", null, pw + " kWp")));
+      // Visual strings
+      for (let si = 0; si < d.strings; si++) {
+        const strWrap = h("div", { style: { background: "#f8fafc", borderRadius: "8px", padding: "8px 10px", border: "1px solid #e2e8f0", marginBottom: "6px" } });
+        const strHdr = h("div", { style: { display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" } });
+        strHdr.append(h("span", { style: { fontSize: "11px", fontWeight: "600", color: "#475569", width: "50px" } }, "String " + (si + 1)));
+        strHdr.append(h("span", { style: { fontSize: "10px", color: "#94a3b8" } }, d.modulesPerString + " panels"));
+        strWrap.append(strHdr);
+        const icons = h("div", { style: { display: "flex", gap: "3px", flexWrap: "wrap" } });
+        for (let mi = 0; mi < Math.min(d.modulesPerString, 25); mi++) icons.append(h("div", { class: "panel-icon" }));
+        if (d.modulesPerString > 25) icons.append(h("span", { style: { fontSize: "10px", color: "#64748b", display: "flex", alignItems: "center" } }, "+" + (d.modulesPerString - 25)));
+        strWrap.append(icons); mb.append(strWrap);
+      }
+      mc.append(mb); mpptGrid.append(mc);
+    });
+    distCard.append(mpptGrid);
+
+    // Summary
+    const summ = h("div", { style: { marginTop: "16px", background: "#f0fdf4", borderRadius: "10px", padding: "12px 18px", border: "1px solid #bbf7d0", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "10px", fontSize: "13px" } });
+    summ.append(h("span", null, "Panels Used: ", h("b", { class: "mono", style: { color: dist.unusedPanels === 0 ? "#15803d" : "#1e293b" } }, dist.usedPanels + ""), " / " + R.capacity.totalPanels));
+    summ.append(h("span", null, "Total Strings: ", h("b", { class: "mono" }, dist.distributions.reduce((s, d) => s + d.strings, 0) + ""), " / " + dist.maxTotalStrings));
+    summ.append(dist.unusedPanels > 0 ? h("span", { style: { color: "#d97706", fontWeight: "500" } }, "\u26A0 " + dist.unusedPanels + " unused (max panels/string limit)") : h("span", { style: { color: "#15803d", fontWeight: "600" } }, "\u2713 All panels used!"));
+    distCard.append(summ);
+
+    if (dist.currentWarnings && dist.currentWarnings.length) {
+      dist.currentWarnings.forEach(w => {
+        distCard.append(h("div", { style: { background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "10px 14px", color: "#dc2626", fontSize: "12px", marginTop: "8px" } }, "\u26A0 " + w));
+      });
+    }
+  }
+  app.append(distCard);
+
+  // ═══ ALL CONFIGS TABLE ═══
+  if (R.configs && R.configs.length) {
+    const tblCard = h("div", { class: "card", style: { overflow: "hidden", marginBottom: "20px" } });
+    tblCard.append(h("div", { style: { padding: "16px 20px", borderBottom: "1px solid #e2e8f0", fontSize: "15px", fontWeight: "600", color: "#166534", display: "flex", alignItems: "center", gap: "8px" } }, h("span", { class: "badge" }, "3"), " All String Configurations"));
+    const tblWrap = h("div", { style: { overflowX: "auto" } });
+    const tbl = h("table");
+    const thead = h("thead");
+    const thr = h("tr", { style: { background: "#f8fafc" } });
+    ["Panels/String", "Rating", "Voc @ " + state.tMin + deg, "Vmp @ " + state.tMax + deg, "Vmp @ " + state.tMin + deg, "Voc (STC)", "Vmp (STC)", "String kWp"].forEach(hd => thr.append(h("th", null, hd)));
+    thead.append(thr); tbl.append(thead);
+    const tbody = h("tbody");
+    R.configs.forEach(c => {
+      const tr = h("tr", { style: { cursor: "pointer", background: c.rating.label === "BEST" ? "#f0fdf4" : c.rating.label === "FAIL" ? "#fef2f2" : "white" }, onclick: function() { loadBar(c.n); } });
+      tr.append(h("td", { class: "mono", style: { fontWeight: "600" } }, String(c.n)));
+      const badge = h("span", { style: { padding: "3px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "700", color: "white", background: c.rating.color, display: "inline-block" } }, c.rating.icon + " " + c.rating.label);
+      tr.append(h("td", null, badge));
+      tr.append(h("td", { class: "mono", style: { color: +c.vocCold > R.inverterSpec.maxDcV ? "#dc2626" : "#334155", fontWeight: +c.vocCold > R.inverterSpec.maxDcV ? "700" : "400" } }, c.vocCold + " V"));
+      tr.append(h("td", { class: "mono", style: { color: +c.vmpHot < R.inverterSpec.mpptMin ? "#dc2626" : "#334155", fontWeight: +c.vmpHot < R.inverterSpec.mpptMin ? "700" : "400" } }, c.vmpHot + " V"));
+      tr.append(h("td", { class: "mono" }, c.vmpCold + " V"));
+      tr.append(h("td", { class: "mono", style: { color: "#94a3b8" } }, c.vocStc + " V"));
+      tr.append(h("td", { class: "mono", style: { color: "#94a3b8" } }, c.vmpStc + " V"));
+      tr.append(h("td", { class: "mono" }, c.stringPower));
+      tbody.append(tr);
+    });
+    tbl.append(tbody); tblWrap.append(tbl); tblCard.append(tblWrap);
+    tblCard.append(h("div", { style: { padding: "8px 20px", fontSize: "11px", color: "#94a3b8", background: "#f8fafc", borderTop: "1px solid #e2e8f0" } }, "Click any row to update the voltage bar above"));
+    app.append(tblCard);
+  }
+
+  // Footer
+  app.append(h("div", { style: { textAlign: "center", marginTop: "36px", fontSize: "11px", color: "#94a3b8", lineHeight: "1.8" } },
+    "Panel Data: Adani Solar N-type Bifacial (605\u2013640 Wp) \u00b7 Tc(Voc): -0.23%/" + deg + " \u00b7 STC: 25" + deg + ", 1000 W/m\u00b2",
+    h("br"),
+    "\u00a9 Qbits Energy \u2014 A Heaven Green Energy Limited Brand"
+  ));
+}
+
+loadOptions();
+</script>
+</body>
+</html>
