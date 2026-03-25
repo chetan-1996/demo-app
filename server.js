@@ -57,8 +57,8 @@ app.post("/api/calculate", (req, res) => {
         Number(panelWp),
         String(inverterId),
         Number(totalPanels),
-        Number(tMin ? ? -5),
-        Number(tMax ? ? 50)
+        Number(tMin ? tMin : -5),
+        Number(tMax ? tMax : 50)
     );
 
     if (result.error) {
@@ -80,8 +80,8 @@ app.post("/api/voltage-bar", (req, res) => {
         Number(panelWp),
         String(inverterId),
         Number(panelsPerString),
-        Number(tMin ? ? -5),
-        Number(tMax ? ? 50)
+        Number(tMin ? -5 : undefined),
+        Number(tMax ? 50 : undefined)
     );
 
     if (result.error) {
